@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { callTool } from "../api/rpc";
+import { callToolPages } from "../api/rpc";
 import type { Project, SchemaInfo } from "../lib/types";
 
 interface ProjectInfo {
@@ -23,16 +23,20 @@ export function useProjects(): UseProjectsResult {
     setLoading(true);
     setError(null);
     try {
-      const result = await callTool<{ projects: Project[] }>("list_projects");
-      const list = result.projects ?? [];
+      const pages = await callToolPages<{ projects: Project[] }>("list_projects", { include_details: true });
+      const list = pages.flatMap(page => page.projects ?? []);
 
       /* Fetch schema for each project */
       const infos: ProjectInfo[] = await Promise.all(
         list.map(async (p) => {
           try {
-            const schema = await callTool<SchemaInfo>("get_graph_schema", {
+            const pages = await callToolPages<SchemaInfo>("get_graph_schema", {
               project: p.name,
             });
+            const schema: SchemaInfo = {
+              node_labels: pages.flatMap(page => page.node_labels ?? []),
+              edge_types: pages.flatMap(page => page.edge_types ?? []),
+            };
             return { project: p, schema };
           } catch {
             return { project: p, schema: null };
