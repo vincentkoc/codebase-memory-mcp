@@ -54,14 +54,16 @@ export default function SloppinessControls({ project, onChange }: {
                 <option value="off">off</option><option value="clone_sloc">duplicate SLOC</option><option value="complex_mass">high-CC mass</option>
             </select></label>
             <button type="button" onClick={() => { generation.current++; setIndex(undefined); setRunId(undefined); }}>clear slop</button>
+        </>}
+        {error && <p role="alert">{error}</p>}
+        </>}
+        {run && <>
             <p className="atlas-slop-provenance">{run.scope} · {run.summary.coverage as string} coverage · {run.files.length.toLocaleString()} files
                 {' · '}{Array.isArray(run.summary.parse_failures) ? run.summary.parse_failures.length : 'unrecorded'} parse gaps
                 {' · scan HEAD '}{run.head.slice(0, 12)}{' · '}{run.created_at}
                 {' · engine '}{String((run.policy.engine as Record<string, unknown> | undefined)?.version ?? 'unrecorded')}
                 <br />file-level historical measurements · graph revision alignment unverified · advisory TS/JS coverage</p>
             {metric !== 'off' && <p>blue → red: increasing {metric === 'clone_sloc' ? 'duplicate SLOC' : 'high-CC mass'} within this run (log scale) · grey: unmeasured</p>}
-        </>}
-        {error && <p role="alert">{error}</p>}
         </>}
     </div>;
 }

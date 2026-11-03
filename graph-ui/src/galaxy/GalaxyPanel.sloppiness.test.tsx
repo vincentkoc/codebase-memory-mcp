@@ -42,6 +42,13 @@ it('imports separate scopes, switches metrics and clears measurements on project
         await vi.waitFor(() => expect(colours()).toContain('hsl(220'));
         expect(host.textContent).toContain('partial coverage');
         expect(host.textContent).toContain('revision alignment unverified');
+        await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Slop index controls"]')!.click());
+        expect(host.querySelector('[aria-label="Load slop index"]')).toBeNull();
+        expect(host.textContent).toContain('partial coverage');
+        expect(host.textContent).toContain('revision alignment unverified');
+        expect(host.textContent).toContain('log scale');
+        expect(colours()).toContain('hsl(220');
+        await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Slop index controls"]')!.click());
         await select('Slop colour metric', 'complex_mass');
         expect(colours()).toContain('hsl(0');
         await select('Slop measurement run', '2');
