@@ -141,3 +141,24 @@
 .atlas-graph-recent-menu button { width:100%; display:flex; flex-direction:column; align-items:flex-start; gap:.1rem; text-align:left; border:0; background:transparent; }
 .atlas-graph-recent-menu button span { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.72rem; color:#95a89e; }
 .atlas-graph-recent-menu button[aria-current=true] { opacity:.6; }
+.atlas-slop-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 8px 0;
+    font-size: 11px;
+}
+.atlas-slop-controls label { display: flex; align-items: center; gap: 6px; }
+.atlas-slop-controls input { max-width: 190px; font-size: 11px; }
+.atlas-slop-controls select, .atlas-slop-controls button {
+    color: inherit;
+    background: var(--atlas-panel);
+    border: 1px solid var(--atlas-line);
+    border-radius: 4px;
+    padding: 3px 6px;
+    font: inherit;
+}
+.atlas-slop-controls p { flex-basis: 100%; margin: 0; line-height: 1.5; }
+.atlas-slop-provenance { color: var(--atlas-dim); }
+.atlas-slop-controls [role='alert'] { color: var(--atlas-alarm); }

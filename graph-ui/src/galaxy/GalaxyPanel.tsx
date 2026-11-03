@@ -135,6 +135,9 @@ import { GraphScene, computeCameraTarget, computeFitTarget, computeFrameTarget }
 import type { CameraTarget } from './GraphScene';
 import type { LabelBox } from './NodeLabels';
 import { NodeTooltipCard } from './NodeTooltipCard';
+import SloppinessControls from './SloppinessControls';
+import { nodeSlopFile, paintSloppiness, slopFiles } from './sloppiness';
+import type { SlopSelection } from './sloppiness';
 import { HoverCardHtml } from './hover-layer';
 import GalaxyNavigator from './GalaxyNavigator';
 import { TraceEdgeFilter } from './TraceEdgeFilter';
@@ -776,6 +779,9 @@ export default function GalaxyPanel(props: GalaxyPanelProps): JSX.Element {
     } = props;
 
     const [layout, setData] = useState<GraphData | undefined>(undefined);
+    const [slop, setSlop] = useState<SlopSelection>();
+    const activeSlop = slop?.project === project ? slop : undefined;
+    const slopMeasurements = useMemo(() => activeSlop ? slopFiles(activeSlop.run) : undefined, [activeSlop]);
     const [layoutLoading, setLayoutLoading] = useState(false);
     const [spacingBusy, setSpacingBusy] = useState(false);
     const { preferences: viewPreferences, setPreferences: setViewPreferences } = useViewPreferences(project);
@@ -1204,6 +1210,7 @@ export default function GalaxyPanel(props: GalaxyPanelProps): JSX.Element {
         [scenePicture, hiddenKinds, props.workspaceExpanded, nodeBudget, edgeBudget, scope.result?.roots, scope.scope, mode, data, sceneScoped],
     );
     const shown = mode === 'hierarchy' || sceneData === data ? sceneShown : undefined;
+    const slopScene = useMemo(() => paintSloppiness(sceneShown, activeSlop), [sceneShown, activeSlop]);
 
     const traceKinds = useMemo(() => edgeKinds(shown), [shown]);
     const agentEvidence = useMemo(() => scope.scope ? galaxyScopeEvidence({ project, identity: scope.scope,
@@ -2466,6 +2473,7 @@ export default function GalaxyPanel(props: GalaxyPanelProps): JSX.Element {
             data-replay={replayAt !== undefined}
         >
             <header className="atlas-galaxy-head">
+                <SloppinessControls key={project} project={project} onChange={setSlop} />
                 <div className="atlas-galaxy-head-row" data-hint-keep="graph head">
                     <span className="atlas-galaxy-title">GALAXY</span>
                     {/*
@@ -2870,7 +2878,7 @@ export default function GalaxyPanel(props: GalaxyPanelProps): JSX.Element {
                         onRenderBusyChange={setSpacingBusy}
                         idleRotation={mode === 'galaxy' && !sceneScoped}
                         rootIds={mode === 'galaxy' && sceneScoped ? scope.result?.roots : undefined}
-                        data={sceneShown}
+                        data={slopScene!}
                         display={display}
                         highlightedIds={sceneTrailIds ?? (scope.scope && scope.depth > 1 && mode === 'galaxy' ? null : highlighted)}
                         path={sceneTrailIds && trailView && scenePathSteps ? { steps: scenePathSteps, active: trailActive, labels: trailView.labels } : undefined}
@@ -2944,7 +2952,11 @@ export default function GalaxyPanel(props: GalaxyPanelProps): JSX.Element {
                             <div className="atlas-coverage-tooltip"><b>{node.file_path ?? node.name}</b><p>Coverage shadow: not fully indexed.</p></div>
                         </HoverCardHtml>}
                         onBackgroundClick={handleBackgroundClick}
-                        renderTooltip={(node) => <NodeTooltipCard node={node} />}
+                        renderTooltip={(node) => <NodeTooltipCard node={node}
+                            slop={activeSlop?.metric !== 'off' && slopMeasurements ? {
+                                scope: activeSlop!.run.scope,
+                                file: nodeSlopFile(node, slopMeasurements),
+                            } : undefined} />}
                         overlay={overlay}
                     />
                 )}

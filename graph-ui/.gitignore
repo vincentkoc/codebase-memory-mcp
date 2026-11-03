@@ -1,6 +1,8 @@
 .DS_Store
 cbm/
 node_modules/
+# Qualified shared dependencies can be symlinks.
+node_modules
 dist/
 *.log
 .vite/

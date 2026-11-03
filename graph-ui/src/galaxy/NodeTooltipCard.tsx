@@ -20,6 +20,8 @@ import { galaxyCardText } from './galaxy-strings';
 import { HoverCardHtml } from './hover-layer';
 import { graphNodeIndexName, graphNodeName, nodeFilePath } from './node-names';
 import type { GraphNode } from './types';
+import { slopTooltipRows } from './sloppiness';
+import type { SlopFile } from './sloppiness';
 
 /** Der Zeilenbereich, wenn das Layout einen fuehrt. */
 export function lineRangeOf(node: GraphNode): string {
@@ -59,8 +61,8 @@ export function tooltipAction(node: GraphNode): string {
     return file === undefined || file.length === 0 ? galaxyCardText.nothingToOpen : galaxyCardText.openFile;
 }
 
-export function NodeTooltipCard({ node }: { node: GraphNode }): JSX.Element {
-    const rows = tooltipRows(node);
+export function NodeTooltipCard({ node, slop }: { node: GraphNode; slop?: { scope: string; file?: SlopFile } }): JSX.Element {
+    const rows = [...tooltipRows(node), ...(slop ? slopTooltipRows(slop.file) : [])];
     const lines = lineRangeOf(node);
     // Round 4 (N1): a Branch node shows what it is, its name in the index stands where a file would, and "{}" is no file.
     const file = nodeFilePath(node);
@@ -94,6 +96,7 @@ export function NodeTooltipCard({ node }: { node: GraphNode }): JSX.Element {
                 {node.status !== undefined && node.status !== 'structural' && (
                     <p className="atlas-galaxy-card-status">{node.status}</p>
                 )}
+                {slop && <p className="atlas-galaxy-card-status">{slop.scope} file context · revision alignment unverified</p>}
                 <p className="atlas-galaxy-card-action">{tooltipAction(node)}</p>
             </div>
         </HoverCardHtml>

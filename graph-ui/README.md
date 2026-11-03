@@ -33,6 +33,32 @@ not an atomic document lock. Saves are limited to 8,000 UTF-8 bytes and a 16 KiB
 serialized request. The examples in `fixtures/adr/` are explicitly synthetic and
 are never inserted into real projects automatically.
 
+## Slop index overlay
+
+Galaxy can import an existing local `code-sloppiness` measurement index without
+scanning or changing source. Export explicitly selected runs with system Python:
+
+```sh
+python3 tools/export-slop-index.py --db /path/to/measurements.sqlite3 \
+  --project EXACT_INDEXED_PROJECT --run 1 --run 2 > slop-index.json
+```
+
+Use **slop index** in Galaxy to load that JSON. Select a production or test run
+and colour by duplicate SLOC or high-CC mass. Colours use a logarithmic scale
+within the selected run; blue includes measured zero, and grey means unmeasured.
+Turning the overlay off restores native colours. Layout, relationships, scope
+navigation and coverage shadows remain unchanged. Imports stay in memory and
+clear when the selected project changes.
+
+Measurements describe files, including when hovering a function node. They are
+advisory TS/JS data, not correctness findings or authorship detection. The export
+retains scan HEAD, file hashes, engine policy, coverage gaps and exclusions. The
+project name is caller-supplied and must match the selected index; this does not
+verify graph revision alignment. The UI labels alignment unverified, including
+for historical graphs. Unsupported or failed files are never treated as clean.
+The importer accepts JSON up to 32 MiB; the exporter reads SQLite in one read-only
+transaction and never invokes the scanner or a model.
+
 ## Local agent
 
 The top-bar agent status opens model configuration; the adjacent chat control folds
