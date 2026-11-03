@@ -27,6 +27,10 @@ import { ResizeHandle } from "./ResizeHandle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import type { GraphNode, GraphData, RepoInfo } from "../lib/types";
 import { colorForStatus } from "../lib/colors";
+import SloppinessControls from "./SloppinessControls";
+import { NodeTooltip } from "./NodeTooltip";
+import { nodeSlopFile, paintSloppiness, slopFiles } from "../lib/sloppiness";
+import type { SlopSelection } from "../lib/sloppiness";
 
 /* Persist panel widths */
 function loadWidth(key: string, fallback: number): number {
@@ -66,6 +70,13 @@ export function formatGraphLimitNotice(data: GraphData | null): string | null {
 
 export function GraphTab({ project }: GraphTabProps) {
   const { data, loading, error, progress, fetchOverview } = useGraphData();
+  const [slop, setSlop] = useState<SlopSelection>();
+  const [slopReset, setSlopReset] = useState(0);
+  const activeSlop = slop?.project === project ? slop : undefined;
+  const slopMeasurements = useMemo(
+    () => activeSlop ? slopFiles(activeSlop.run) : undefined,
+    [activeSlop],
+  );
   const [highlightedIds, setHighlightedIds] = useState<Set<number> | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
@@ -114,6 +125,10 @@ export function GraphTab({ project }: GraphTabProps) {
   const [showOnlyDead, setShowOnlyDead] = useState(false);
   const [hideEntryPoints, setHideEntryPoints] = useState(false);
   const [hideTests, setHideTests] = useState(false);
+  const updateSlop = useCallback((selection: SlopSelection | undefined) => {
+    setSlop(selection);
+    if (selection && selection.metric !== "off") setDeadCodeView(false);
+  }, []);
 
   /* Initialize filters when data loads */
   useEffect(() => {
@@ -178,6 +193,10 @@ export function GraphTab({ project }: GraphTabProps) {
     hideEntryPoints,
     hideTests,
   ]);
+  const slopData = useMemo(
+    () => paintSloppiness(filteredData ?? undefined, activeSlop),
+    [filteredData, activeSlop],
+  );
 
   /* Re-read the persisted budget when the project changes… */
   useEffect(() => {
@@ -409,7 +428,11 @@ export function GraphTab({ project }: GraphTabProps) {
           showOnlyDead={showOnlyDead}
           hideEntryPoints={hideEntryPoints}
           hideTests={hideTests}
-          onToggleDeadCodeView={() => setDeadCodeView((v) => !v)}
+          onToggleDeadCodeView={() => {
+            setSlop(undefined);
+            setSlopReset(value => value + 1);
+            setDeadCodeView(value => !value);
+          }}
           onToggleShowOnlyDead={() => setShowOnlyDead((v) => !v)}
           onToggleHideEntryPoints={() => setHideEntryPoints((v) => !v)}
           onToggleHideTests={() => setHideTests((v) => !v)}
@@ -436,6 +459,7 @@ export function GraphTab({ project }: GraphTabProps) {
 
       {/* Graph area */}
       <div className="flex-1 relative overflow-hidden">
+        <SloppinessControls key={`${project}:${slopReset}`} project={project} onChange={updateSlop} />
         {filteredData.nodes.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
@@ -449,7 +473,7 @@ export function GraphTab({ project }: GraphTabProps) {
           <>
             <ErrorBoundary>
               <GraphScene
-                data={filteredData}
+                data={slopData!}
                 missed={showMissedSkeleton ? missedSkeleton : null}
                 highlightedIds={highlightedIds}
                 cameraTarget={cameraTarget}
@@ -457,6 +481,11 @@ export function GraphTab({ project }: GraphTabProps) {
                 display={display}
                 onNodeClick={handleNodeClick}
                 onBackgroundClick={handleBackgroundClick}
+                renderTooltip={(node) => <NodeTooltip node={node}
+                  slop={slopData?.nodes.includes(node) && activeSlop?.metric !== "off" && slopMeasurements ? {
+                    scope: activeSlop!.run.scope,
+                    file: nodeSlopFile(node, slopMeasurements),
+                  } : undefined} />}
               />
             </ErrorBoundary>
 

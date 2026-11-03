@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import type { ReactNode } from "react";
 import { Canvas, useThree, useFrame } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -112,6 +113,7 @@ function IdleAutoRotate({
 
 interface GraphSceneProps {
   data: GraphData;
+  renderTooltip?: (node: GraphNode) => ReactNode;
   /* Missed skeleton (#963): pre-offset, pre-painted white nodes + edges of
    * the not-fully-indexed files, rendered as a ghost cluster beside the
    * galaxy. null hides it. */
@@ -130,6 +132,7 @@ export type { CameraTarget };
 
 export function GraphScene({
   data,
+  renderTooltip,
   missed = null,
   highlightedIds,
   cameraTarget,
@@ -251,7 +254,7 @@ export function GraphScene({
         );
       })}
 
-      {hovered && <NodeTooltip node={hovered} />}
+      {hovered && (renderTooltip ? renderTooltip(hovered) : <NodeTooltip node={hovered} />)}
 
       <CameraAnimator target={cameraTarget} controlsRef={controlsRef} />
       <IdleAutoRotate controlsRef={controlsRef} />
