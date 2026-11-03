@@ -459,7 +459,8 @@ export function GraphTab({ project }: GraphTabProps) {
 
       {/* Graph area */}
       <div className="flex-1 relative overflow-hidden">
-        <SloppinessControls key={`${project}:${slopReset}`} project={project} onChange={updateSlop} />
+        <SloppinessControls key={project} project={project} resetToken={slopReset}
+          initialMetric={deadCodeView ? "off" : "clone_sloc"} onChange={updateSlop} />
         {filteredData.nodes.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">

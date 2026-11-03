@@ -57,6 +57,22 @@ export function App() {
     setRoute({ tab, project });
   }, []);
 
+  /* A configured saved scan also identifies the project for a bare graph URL. */
+  useEffect(() => {
+    if (activeTab !== "graph" || selectedProject) return;
+    const controller = new AbortController();
+    void fetch("/api/sloppiness", { signal: controller.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then((value: unknown) => {
+        if (controller.signal.aborted || !value || typeof value !== "object"
+          || !("project" in value) || typeof value.project !== "string" || !value.project) return;
+        window.history.replaceState(null, "", routeUrl("graph", value.project));
+        setRoute({ tab: "graph", project: value.project });
+      })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [activeTab, selectedProject]);
+
   const tabs: { id: TabId; label: string }[] = [
     { id: "graph", label: t.tabs.graph },
     { id: "stats", label: t.tabs.projects },

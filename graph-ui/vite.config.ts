@@ -3,6 +3,7 @@ import { defineConfig, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import { slopIndexPlugin } from "./slop-index-plugin";
 
 const uiBackendOrigin = "http://127.0.0.1:9749";
 const uiDevOrigins = new Set([
@@ -26,7 +27,7 @@ const uiBackendProxy = (): ProxyOptions => ({
 });
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), slopIndexPlugin(process.env.CBM_SLOP_INDEX_FILE)],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
