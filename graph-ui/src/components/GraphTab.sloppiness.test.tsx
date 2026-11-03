@@ -52,7 +52,7 @@ it("keeps the original graph controls and geometry while switching measured scop
   await waitFor(() => expect(screen.getByTestId("scene").dataset.colours).toBe('["#ffffff"]'));
   fireEvent.change(screen.getByLabelText("Slop colour metric"), { target: { value: "clone_sloc" } });
   fireEvent.click(screen.getByRole("button", { name: "Color by status" }));
-  expect(screen.queryByLabelText("Slop measurement run")).toBeNull();
+  await waitFor(() => expect(screen.getByLabelText("Slop colour metric")).toHaveValue("off"));
   view.rerender(<GraphTab project="other" />);
   await waitFor(() => expect(screen.getByTestId("scene").dataset.colours).toBe('["#334155"]'));
   expect(screen.queryByLabelText("Slop measurement run")).toBeNull();
