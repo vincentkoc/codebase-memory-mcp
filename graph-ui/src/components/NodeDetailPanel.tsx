@@ -76,6 +76,7 @@ export function NodeDetailPanel({
       const res = await callTool<SnippetResult>("get_code_snippet", {
         qualified_name: node.qualified_name,
         project,
+        source_mode: "full",
       });
       setCode(res.source ?? "(source not available)");
     } catch (e) {

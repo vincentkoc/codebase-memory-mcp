@@ -1,9 +1,12 @@
 import { Html } from "@react-three/drei";
 import type { GraphNode } from "../lib/types";
 import { colorForLabel, colorForStatus } from "../lib/colors";
+import { slopTooltipRows } from "../lib/sloppiness";
+import type { SlopFile } from "../lib/sloppiness";
 
 interface NodeTooltipProps {
   node: GraphNode;
+  slop?: { scope: string; file?: SlopFile };
 }
 
 function lineRange(node: GraphNode): string | null {
@@ -13,7 +16,7 @@ function lineRange(node: GraphNode): string | null {
   return `L${node.start_line}`;
 }
 
-export function NodeTooltip({ node }: NodeTooltipProps) {
+export function NodeTooltip({ node, slop }: NodeTooltipProps) {
   return (
     <Html
       position={[node.x, node.y + node.size * 0.7, node.z]}
@@ -49,6 +52,10 @@ export function NodeTooltip({ node }: NodeTooltipProps) {
             )}
           </div>
         )}
+        {slop && <div className="mt-2 border-t border-white/10 pt-1 text-white/60">
+          {slopTooltipRows(slop.file).map(([name, value]) => <p key={name}>{name}: {value}</p>)}
+          <p className="text-amber-200/70">{slop.scope} file context · revision alignment unverified</p>
+        </div>}
         <p className="text-white/20 mt-1 text-[10px]">click for code →</p>
       </div>
     </Html>
