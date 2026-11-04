@@ -23,6 +23,10 @@
 #include "foundation/sha256.h"
 #include "foundation/compat_fs.h"
 #include "foundation/log.h"
+#include "foundation/subprocess.h"
+#include "foundation/constants.h"
+#include "discover/discover.h"
+#include "cbm.h"
 #include "foundation/win_utf8.h" // cbm_utf8_to_wide (Windows pipeline_test_set_mtime); no-op elsewhere
 #include "discover/userconfig.h"
 
@@ -32,6 +36,9 @@
 #include <stdatomic.h>
 #include "foundation/compat_thread.h"
 #include <fcntl.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "graph_buffer/graph_buffer.h"
@@ -12124,6 +12131,389 @@ TEST(implements_no_match) {
 
 /* ── Usages pass tests (full pipeline integration) ──────────────── */
 
+enum {
+    USAGES_MIXED_FILES = 4,
+    USAGES_SOURCE_FILES = 3,
+    USAGES_EMPTY_SLOT = 2,
+    USAGES_EXPECTED_EDGES = 2,
+    USAGES_FIFO_FILES = 6,
+    USAGES_STALL_FILES = 2,
+    USAGES_STEP_MS = 1000,
+    USAGES_QUIET_MS = 4000,
+    USAGES_WAIT_MS = 30000,
+    USAGES_POLL_US = 10000,
+    USAGES_FIFO_MODE = 0600,
+    USAGES_PROBE_ARGC = 3,
+    USAGES_PROBE_DIR_ARG = 2,
+    USAGES_LOG_RADIX = 10
+};
+
+typedef struct {
+    int done;
+    int total;
+    int errors;
+    bool valid;
+    bool started;
+    char home[CBM_SZ_512];
+    char runtime[CBM_SZ_512];
+} usages_progress_observation_t;
+
+static usages_progress_observation_t usages_progress_observation;
+
+static bool usages_fixture_path(yyjson_val *root, const char *key, char *out) {
+    const char *value = yyjson_get_str(yyjson_obj_get(root, key));
+    if (!value || strlen(value) >= CBM_SZ_512) {
+        return false;
+    }
+    memcpy(out, value, strlen(value) + SKIP_ONE);
+    return true;
+}
+
+static bool usages_log_count(yyjson_val *root, const char *key, int limit, int *out) {
+    const char *text = yyjson_get_str(yyjson_obj_get(root, key));
+    if (!text || !text[0]) {
+        return false;
+    }
+    char *end = NULL;
+    errno = 0;
+    long value = strtol(text, &end, USAGES_LOG_RADIX);
+    if (errno || *end || value < 0 || value > limit) {
+        return false;
+    }
+    *out = (int)value;
+    return true;
+}
+
+static void observe_usages_progress(const char *line, void *opaque) {
+    usages_progress_observation_t *observation = opaque;
+    yyjson_doc *doc = yyjson_read(line, strlen(line), 0);
+    if (!doc) {
+        return;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *message = yyjson_obj_get(root, "event");
+    bool usages = yyjson_equals_str(yyjson_obj_get(root, "pass"), "usages");
+    if (usages && yyjson_equals_str(message, "pass.start")) {
+        observation->started = true;
+    }
+    if (yyjson_equals_str(message, "usages.fixture.ready")) {
+        bool home = usages_fixture_path(root, "home", observation->home);
+        bool runtime = usages_fixture_path(root, "runtime", observation->runtime);
+        observation->valid = observation->valid && home && runtime;
+    }
+    if (usages && yyjson_equals_str(message, "pass.progress")) {
+        int done = 0;
+        int total = 0;
+        int errors = 0;
+        bool parsed = usages_log_count(root, "done", observation->total, &done) &&
+                      usages_log_count(root, "total", observation->total, &total) &&
+                      usages_log_count(root, "errors", observation->total, &errors);
+        bool bounded =
+            parsed && total == observation->total && done > 0 && done <= total && errors <= done;
+        observation->valid = observation->valid && bounded &&
+                             done == observation->done + SKIP_ONE && errors >= observation->errors;
+        if (bounded) {
+            observation->done = done;
+            observation->errors = errors;
+        }
+    }
+    yyjson_doc_free(doc);
+}
+
+static void capture_usages_progress(const char *line) {
+    observe_usages_progress(line, &usages_progress_observation);
+}
+
+static bool usages_graph_source(cbm_gbuf_t *gbuf, cbm_registry_t *registry, const char *path,
+                                const char *name, const char *source, CBMFileResult **out) {
+    if (th_write_file(path, source) != 0) {
+        return false;
+    }
+    *out =
+        cbm_extract_file(source, (int)strlen(source), CBM_LANG_GO, "progress", name, 0, NULL, NULL);
+    if (!*out) {
+        return false;
+    }
+    for (int d = 0; d < (*out)->defs.count; d++) {
+        const CBMDefinition *def = &(*out)->defs.items[d];
+        cbm_registry_add(registry, def->name, def->qualified_name, def->label);
+        if (cbm_gbuf_upsert_node(gbuf, def->label, def->name, def->qualified_name, name,
+                                 (int)def->start_line, (int)def->end_line, "{}") <= 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool usages_abort_progress_cases(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files) {
+    usages_progress_observation =
+        (usages_progress_observation_t){.total = USAGES_MIXED_FILES, .valid = true};
+    atomic_store(ctx->cancelled, SKIP_ONE);
+    int cancel_rc = cbm_pipeline_pass_usages(ctx, files, USAGES_MIXED_FILES);
+    bool cancelled_cleanly = cancel_rc == CBM_NOT_FOUND && usages_progress_observation.done == 0;
+    atomic_store(ctx->cancelled, 0);
+    usages_progress_observation =
+        (usages_progress_observation_t){.total = USAGES_MIXED_FILES, .valid = true};
+    ctx->result_cache[0]->test_declarations_status = CBM_TEST_EXTRACT_OOM;
+    int fatal_rc = cbm_pipeline_pass_usages(ctx, files, USAGES_MIXED_FILES);
+    ctx->result_cache[0]->test_declarations_status = CBM_TEST_EXTRACT_OK;
+    bool fatal_cleanly =
+        fatal_rc == CBM_PIPELINE_ABORT_PRESERVE_DB && usages_progress_observation.done == 0;
+    return cancelled_cleanly && fatal_cleanly;
+}
+
+TEST(usages_progress_counts_completed_attempts_preserves_edges) {
+    char dir[] = "/tmp/cbm-usages-progress-XXXXXX";
+    ASSERT_NOT_NULL(cbm_mkdtemp(dir));
+    char names[][CBM_SZ_32] = {"cached.go", "uncached.go", "empty.go", "missing.go"};
+    const char *sources[] = {
+        "package main\nfunc First() {}\nfunc UseFirst() { handler := First; _ = handler }\n",
+        "package main\nfunc Second() {}\nfunc UseSecond() { handler := Second; _ = handler }\n",
+        "package main\n"};
+    char paths[USAGES_MIXED_FILES][CBM_SZ_512];
+    cbm_file_info_t files[USAGES_MIXED_FILES] = {0};
+    CBMFileResult *results[USAGES_SOURCE_FILES] = {0};
+    cbm_gbuf_t *gbuf = cbm_gbuf_new("progress", dir);
+    cbm_registry_t *registry = cbm_registry_new();
+    bool setup = gbuf && registry;
+    for (int i = 0; i < USAGES_MIXED_FILES; i++) {
+        snprintf(paths[i], sizeof(paths[i]), "%s/%s", dir, names[i]);
+        files[i] =
+            (cbm_file_info_t){.path = paths[i], .rel_path = names[i], .language = CBM_LANG_GO};
+        if (i < USAGES_SOURCE_FILES && setup) {
+            setup =
+                usages_graph_source(gbuf, registry, paths[i], names[i], sources[i], &results[i]);
+        }
+    }
+    CBMFileResult *cache[] = {results[0], NULL, results[USAGES_EMPTY_SLOT], NULL};
+    atomic_int cancelled = 0;
+    cbm_pipeline_ctx_t ctx = {.project_name = "progress",
+                              .repo_path = dir,
+                              .gbuf = gbuf,
+                              .registry = registry,
+                              .cancelled = &cancelled,
+                              .result_cache = cache};
+    CBMLogLevel old_level = cbm_log_get_level();
+    CBMLogFormat old_format = cbm_log_get_format();
+    cbm_log_set_level(CBM_LOG_INFO);
+    cbm_log_set_format(CBM_LOG_FORMAT_JSON);
+    cbm_log_set_sink(capture_usages_progress);
+    usages_progress_observation =
+        (usages_progress_observation_t){.total = USAGES_MIXED_FILES, .valid = true};
+    int rc = setup ? cbm_pipeline_pass_usages(&ctx, files, USAGES_MIXED_FILES) : CBM_NOT_FOUND;
+    usages_progress_observation_t completed = usages_progress_observation;
+    int edges = setup ? cbm_gbuf_edge_count_by_type(gbuf, "USAGE") : 0;
+    bool aborted_cleanly = setup && usages_abort_progress_cases(&ctx, files);
+    cbm_log_set_sink(NULL);
+    cbm_log_set_format(old_format);
+    cbm_log_set_level(old_level);
+    for (int i = 0; i < USAGES_SOURCE_FILES; i++) {
+        cbm_free_result(results[i]);
+        (void)unlink(paths[i]);
+    }
+    cbm_registry_free(registry);
+    cbm_gbuf_free(gbuf);
+    (void)rmdir(dir);
+    bool complete =
+        completed.valid && completed.done == USAGES_MIXED_FILES && completed.errors == SKIP_ONE;
+    ASSERT_TRUE(setup);
+    ASSERT_TRUE(rc == 0 && edges == USAGES_EXPECTED_EDGES && complete);
+    ASSERT_TRUE(aborted_cleanly);
+    PASS();
+}
+
+/* Dispatched only after the runner establishes its private cache/runtime.
+ * FIFOs pace actual file attempts, never an independent log writer. */
+extern int tf_maybe_run_usages_progress_probe(int argc, char **argv);
+int tf_maybe_run_usages_progress_probe(int argc, char **argv) {
+    if (argc != USAGES_PROBE_ARGC || strcmp(argv[SKIP_ONE], "__cbm_usages_progress_probe") != 0) {
+        return -SKIP_ONE;
+    }
+#ifdef _WIN32
+    return EXIT_FAILURE;
+#else
+    char paths[USAGES_FIFO_FILES][CBM_SZ_512];
+    cbm_file_info_t files[USAGES_FIFO_FILES] = {0};
+    for (int i = 0; i < USAGES_FIFO_FILES; i++) {
+        snprintf(paths[i], sizeof(paths[i]), "%s/file%d", argv[USAGES_PROBE_DIR_ARG], i);
+        files[i] =
+            (cbm_file_info_t){.path = paths[i], .rel_path = "fixture.go", .language = CBM_LANG_GO};
+    }
+    atomic_int cancelled = 0;
+    cbm_pipeline_ctx_t ctx = {.cancelled = &cancelled};
+    cbm_log_init_for_process(false, true);
+    cbm_log_set_format(CBM_LOG_FORMAT_JSON);
+    cbm_log_set_crash_durable(true);
+    cbm_log_control("usages.fixture.ready", "home", getenv("HOME"), "runtime",
+                    getenv("CBM_RUNTIME_DIR"));
+    return cbm_pipeline_pass_usages(&ctx, files, USAGES_FIFO_FILES);
+#endif
+}
+
+#ifndef _WIN32
+extern const char *cbm_test_program_path;
+
+typedef struct {
+    char paths[USAGES_FIFO_FILES][CBM_SZ_512];
+    usages_progress_observation_t observed;
+    cbm_proc_result_t result;
+    cbm_subprocess_t *process;
+    int released;
+    uint64_t started;
+    uint64_t next_release;
+    bool poll_ok;
+    bool cancelled;
+} usages_fifo_fixture_t;
+
+static void release_usages_fifo(usages_fifo_fixture_t *fixture, int limit) {
+    if (!fixture->observed.started) {
+        return;
+    }
+    uint64_t now = cbm_now_ms();
+    if (fixture->next_release == 0) {
+        fixture->started = now;
+        fixture->next_release = now + USAGES_STEP_MS;
+    }
+    if (fixture->released >= limit || now < fixture->next_release) {
+        return;
+    }
+    int fd = open(fixture->paths[fixture->released], O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        fixture->poll_ok = fixture->poll_ok && errno == ENXIO;
+        return;
+    }
+    (void)close(fd);
+    fixture->released++;
+    fixture->next_release = now + USAGES_STEP_MS;
+}
+
+static bool wait_usages_fixture(usages_fifo_fixture_t *fixture, int limit) {
+    uint64_t deadline = cbm_now_ms() + USAGES_WAIT_MS;
+    while (cbm_now_ms() < deadline) {
+        cbm_proc_poll_t state = cbm_subprocess_poll(fixture->process, &fixture->result);
+        if (state == CBM_PROC_POLL_TERMINAL) {
+            return true;
+        }
+        if (state == CBM_PROC_POLL_ERROR) {
+            fixture->poll_ok = false;
+            break;
+        }
+        release_usages_fifo(fixture, limit);
+        fixture->poll_ok = fixture->poll_ok && fixture->observed.done <= fixture->released;
+        if (!fixture->poll_ok) {
+            break;
+        }
+        cbm_usleep(USAGES_POLL_US);
+    }
+    fixture->cancelled = cbm_subprocess_request_cancel(fixture->process);
+    deadline = cbm_now_ms() + USAGES_WAIT_MS;
+    while (cbm_now_ms() < deadline) {
+        if (cbm_subprocess_poll(fixture->process, &fixture->result) == CBM_PROC_POLL_TERMINAL) {
+            return true;
+        }
+        cbm_usleep(USAGES_POLL_US);
+    }
+    return false;
+}
+
+static bool remove_usages_child_directory(const char *path, const char *prefix) {
+    const char *name = strrchr(path, '/');
+    if (!name || strncmp(name + SKIP_ONE, prefix, strlen(prefix)) != 0) {
+        return false;
+    }
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return errno == ENOENT;
+    }
+    if (!S_ISDIR(st.st_mode) || st.st_uid != geteuid()) {
+        return false;
+    }
+    return rmdir(path) == 0;
+}
+
+static bool cleanup_usages_fixture(usages_fifo_fixture_t *fixture, const char *dir,
+                                   const char *log_path, bool spawned, bool terminal) {
+    if (spawned && (!terminal || !fixture->result.tree_quiesced)) {
+        (void)fprintf(stderr, "usages fixture retained until child tree is quiescent: %s\n", dir);
+        return false;
+    }
+    bool namespaces = true;
+    if (spawned) {
+        bool home = remove_usages_child_directory(fixture->observed.home, "cbm-test-home-");
+        bool runtime = remove_usages_child_directory(fixture->observed.runtime, "cbm-runtime-run-");
+        namespaces = home && runtime;
+    }
+    for (int i = 0; i < USAGES_FIFO_FILES; i++) {
+        (void)unlink(fixture->paths[i]);
+    }
+    (void)unlink(log_path);
+    (void)rmdir(dir);
+    return namespaces;
+}
+
+static bool usages_supervised_progress_case(bool stall) {
+    char dir[] = "/tmp/cbm-usages-watchdog-XXXXXX";
+    if (!cbm_mkdtemp(dir)) {
+        return false;
+    }
+    usages_fifo_fixture_t fixture = {.observed = {.total = USAGES_FIFO_FILES, .valid = true},
+                                     .poll_ok = true};
+    bool setup = true;
+    for (int i = 0; i < USAGES_FIFO_FILES; i++) {
+        snprintf(fixture.paths[i], sizeof(fixture.paths[i]), "%s/file%d", dir, i);
+        setup = mkfifo(fixture.paths[i], USAGES_FIFO_MODE) == 0 && setup;
+    }
+    char log_path[CBM_SZ_512];
+    snprintf(log_path, sizeof(log_path), "%s/worker.log", dir);
+    const char *args[] = {cbm_test_program_path, "__cbm_usages_progress_probe", dir, NULL};
+    cbm_proc_opts_t opts = {.bin = cbm_test_program_path,
+                            .argv = args,
+                            .log_file = log_path,
+                            .on_log_line = observe_usages_progress,
+                            .log_ud = &fixture.observed,
+                            .quiet_timeout_ms = USAGES_QUIET_MS,
+                            .cancel_grace_ms = USAGES_STEP_MS};
+    bool spawned = setup && cbm_subprocess_spawn(&opts, &fixture.process) == 0;
+    int expected = stall ? USAGES_STALL_FILES : USAGES_FIFO_FILES;
+    bool terminal = spawned && wait_usages_fixture(&fixture, expected);
+    uint64_t elapsed = cbm_now_ms() - fixture.started;
+    if (terminal) {
+        cbm_subprocess_destroy(fixture.process);
+    }
+    bool cleaned = cleanup_usages_fixture(&fixture, dir, log_path, spawned, terminal);
+    bool lifecycle = spawned && terminal && fixture.poll_ok && !fixture.cancelled && cleaned &&
+                     !fixture.result.supervision_failed;
+    bool completed = fixture.observed.started && fixture.observed.valid &&
+                     fixture.observed.done == expected &&
+                     fixture.observed.errors == fixture.observed.done &&
+                     fixture.released == fixture.observed.done;
+    cbm_proc_outcome_t expected_outcome = stall ? CBM_PROC_HANG : CBM_PROC_CLEAN;
+    (void)fprintf(stderr, "usages fixture: stall=%d released=%d completed=%d outcome=%s\n", stall,
+                  fixture.released, fixture.observed.done,
+                  cbm_proc_outcome_str(fixture.result.outcome));
+    return lifecycle && completed && elapsed > USAGES_QUIET_MS &&
+           fixture.result.outcome == expected_outcome;
+}
+#endif
+
+TEST(usages_completed_files_prevent_false_quiet_hang) {
+#ifdef _WIN32
+    SKIP_PLATFORM("POSIX FIFO file-attempt pacing");
+#else
+    ASSERT_TRUE(usages_supervised_progress_case(false));
+    PASS();
+#endif
+}
+
+TEST(usages_stalled_file_still_times_out) {
+#ifdef _WIN32
+    SKIP_PLATFORM("POSIX FIFO file-attempt pacing");
+#else
+    ASSERT_TRUE(usages_supervised_progress_case(true));
+    PASS();
+#endif
+}
+
 /* Helper to create a temp dir with a single source file */
 static char g_usages_tmpdir[256];
 
@@ -23661,6 +24051,9 @@ SUITE(pipeline) {
     RUN_TEST(implements_creates_override);
     RUN_TEST(implements_no_match);
     /* Usages pass (full pipeline integration) */
+    RUN_TEST(usages_progress_counts_completed_attempts_preserves_edges);
+    RUN_TEST(usages_completed_files_prevent_false_quiet_hang);
+    RUN_TEST(usages_stalled_file_still_times_out);
     RUN_TEST(override_explicit_walks_to_nearest_declaring_ancestor);
     RUN_TEST(override_python_through_intermediate_class);
     RUN_TEST(python_crossfile_typed_field_calls_issue1277);

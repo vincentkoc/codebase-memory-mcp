@@ -1911,6 +1911,7 @@ extern void cbm_kind_in_set_free_cache(void);
 extern int tf_maybe_run_subprocess_stdout_probe(int argc, char **argv);
 extern void tf_test_impact_runner_filter_set_binary(const char *path);
 extern int tf_maybe_run_git_facts_diff_probe(int argc, char **argv);
+extern int tf_maybe_run_usages_progress_probe(int argc, char **argv);
 
 /* The runner's own image, for the tests that start or copy it again. argv[0]
  * is the caller's spelling, and a Windows parent that found the runner by
@@ -2114,6 +2115,10 @@ int main(int argc, char **argv) {
     if (!tf_setup_cache_sentinel()) {
         fprintf(stderr, "failed to create isolated test cache and daemon runtime\n");
         return 2;
+    }
+    int usages_probe_rc = tf_maybe_run_usages_progress_probe(argc, argv);
+    if (usages_probe_rc >= 0) {
+        return usages_probe_rc;
     }
 
 #if defined(CBM_TEST_COVERAGE) && !defined(_WIN32)
