@@ -98,6 +98,15 @@ static const char *itoa_log(int val) {
     return bufs[i];
 }
 
+/* A completed attempt is forward progress, including a nonfatal skip. */
+static void log_completed_file(const cbm_pipeline_ctx_t *ctx, int done, int total, int errors) {
+    if (cbm_pipeline_check_cancel(ctx)) {
+        return;
+    }
+    cbm_log_info("pass.progress", "pass", "usages", "done", itoa_log(done), "total",
+                 itoa_log(total), "errors", itoa_log(errors));
+}
+
 /* Check if an exception name is a "checked" exception (Java-style).
  * Checked: Exception, IOException, etc. (extends Exception, not RuntimeException).
  * Simple heuristic: if name contains "Error" or "Panic", it's a runtime exception. */
@@ -450,6 +459,7 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
                     return CBM_PIPELINE_ABORT_PRESERVE_DB;
                 }
                 errors++;
+                log_completed_file(ctx, i + SKIP_ONE, file_count, errors);
                 continue;
             }
             result = cbm_pipeline_test_force_extract_null(ctx, files[i].language)
@@ -464,6 +474,7 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
             }
             if (!result) {
                 errors++;
+                log_completed_file(ctx, i + SKIP_ONE, file_count, errors);
                 continue;
             }
             result_owned = true;
@@ -480,6 +491,7 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
             if (result_owned) {
                 cbm_free_result(result);
             }
+            log_completed_file(ctx, i + SKIP_ONE, file_count, errors);
             continue;
         }
 
@@ -503,6 +515,7 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
         if (result_owned) {
             cbm_free_result(result);
         }
+        log_completed_file(ctx, i + SKIP_ONE, file_count, errors);
     }
 
     cbm_log_info("pass.done", "pass", "usages", "usage", itoa_log(usage_resolved), "throws",
