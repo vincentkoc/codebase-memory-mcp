@@ -1788,6 +1788,35 @@ TEST(tslsp_ctx_user_defined_callback) {
     PASS();
 }
 
+TEST(tslsp_ctx_callback_excess_parameters) {
+    CBMFileResult *r =
+        extract_ts("class Foo { run(): void {} }\n"
+                   "class Bar { check(): void {} }\n"
+                   "function withFoo(cb: (x: Foo) => void): void {}\n"
+                   "function withNone(cb: () => void): void {}\n"
+                   "function typed() {\n"
+                   "    withFoo((x, extra, excess, explicit: Bar) => {\n"
+                   "        x.run(); excess.run(); explicit.check();\n"
+                   "    });\n"
+                   "}\n"
+                   "function empty() { withNone((first, second, third) => third.run()); }\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, ".typed", "run"), 0);
+    ASSERT_GTE(require_resolved(r, ".typed", "check"), 0);
+    int contextual_calls = 0;
+    for (int i = 0; i < r->resolved_calls.count; i++) {
+        const CBMResolvedCall *call = &r->resolved_calls.items[i];
+        if (call->confidence > 0 && call->caller_qn && strstr(call->caller_qn, ".typed") &&
+            call->callee_qn && strstr(call->callee_qn, ".Foo.run")) {
+            contextual_calls++;
+        }
+    }
+    ASSERT_EQ(contextual_calls, 1);
+    ASSERT_EQ(find_resolved(r, ".empty", "run"), -1);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Narrowing (real, not smoke) ───────────────────────────────────────────── */
 
 TEST(tslsp_narrow_typeof_string_method) {
@@ -4943,6 +4972,7 @@ SUITE(ts_lsp) {
     RUN_TEST(tslsp_ctx_array_block_body_callback);
     RUN_TEST(tslsp_ctx_chain_filter_then_map);
     RUN_TEST(tslsp_ctx_user_defined_callback);
+    RUN_TEST(tslsp_ctx_callback_excess_parameters);
 
     /* Narrowing */
     RUN_TEST(tslsp_narrow_typeof_string_method);

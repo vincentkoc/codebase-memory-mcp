@@ -2977,6 +2977,13 @@ static void process_callback_arrow(TSLSPContext *ctx, TSNode arrow, const CBMTyp
                 cbm_scope_bind(ctx->current_scope, nm, pt);
         }
     } else if (!ts_node_is_null(params)) {
+        // Callback formals may outnumber the NULL-terminated expected params.
+        int expected_count = 0;
+        if (expected->data.func.param_types) {
+            while (expected->data.func.param_types[expected_count]) {
+                expected_count++;
+            }
+        }
         uint32_t pc = ts_node_named_child_count(params);
         for (uint32_t i = 0; i < pc; i++) {
             TSNode p = ts_node_named_child(params, i);
@@ -2985,9 +2992,7 @@ static void process_callback_arrow(TSLSPContext *ctx, TSNode arrow, const CBMTyp
             const char *pk = ts_node_type(p);
             const char *pname = NULL;
             const CBMType *expected_pt =
-                (expected->data.func.param_types && expected->data.func.param_types[idx])
-                    ? expected->data.func.param_types[idx]
-                    : NULL;
+                (idx < expected_count) ? expected->data.func.param_types[idx] : NULL;
 
             if (strcmp(pk, "identifier") == 0) {
                 pname = node_text(ctx, p);
